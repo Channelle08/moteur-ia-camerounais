@@ -1,0 +1,123 @@
+version: "3.9"
+
+services:
+
+  # ---------- API Gateway (NestJS) ----------
+  gateway:
+    build: ./backend-gateway
+    container_name: mia-gateway
+    ports:
+      - "3000:3000"
+    environment:
+      - CORE_SERVICE_URL=http://core:8000
+      - ASR_SERVICE_URL=http://asr-service:50051
+      - NMT_SERVICE_URL=http://nmt-service:50052
+      - RABBITMQ_URL=amqp://rabbitmq:5672
+    depends_on:
+      - core
+      - rabbitmq
+    volumes:
+      - ./backend-gateway:/app
+    networks:
+      - mia-network
+
+  # ---------- Serveur métier (Django) ----------
+  core:
+    build: ./backend-core
+    container_name: mia-core
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgres://mia_user:mia_password@db:5432/mia_db
+      - DEBUG=1
+    depends_on:
+      - db
+    volumes:
+      - ./backend-core:/app
+    networks:
+      - mia-network
+
+  # ---------- Base de données ----------
+  db:
+    image: postgres:16-alpine
+    container_name: mia-db
+    environment:
+      - POSTGRES_USER=mia_user
+      - POSTGRES_PASSWORD=mia_password
+      - POSTGRES_DB=mia_db
+    volumes:
+      - mia_pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - mia-network
+
+  # ---------- Service ASR (Whisper) ----------
+  asr-service:
+    build: ./ai-asr-service
+    container_name: mia-asr
+    environment:
+      - RABBITMQ_URL=amqp://rabbitmq:5672
+    depends_on:
+      - rabbitmq
+    volumes:
+      - ./ai-asr-service:/app
+      - mia_models:/app/checkpoints
+    networks:
+      - mia-network
+    # Décommenter si GPU disponible :
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # ---------- Service NMT (NLLB) ----------
+  nmt-service:
+    build: ./ai-nmt-service
+    container_name: mia-nmt
+    environment:
+      - RABBITMQ_URL=amqp://rabbitmq:5672
+    depends_on:
+      - rabbitmq
+    volumes:
+      - ./ai-nmt-service:/app
+      - mia_models:/app/checkpoints
+    networks:
+      - mia-network
+
+  # ---------- Message Broker ----------
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: mia-rabbitmq
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Interface de management (http://localhost:15672)
+    networks:
+      - mia-network
+
+  # ---------- Frontend Web (Next.js) ----------
+  frontend-web:
+    build: ./frontend-web
+    container_name: mia-frontend-web
+    ports:
+      - "3001:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:3000
+    depends_on:
+      - gateway
+    volumes:
+      - ./frontend-web:/app
+      - /app/node_modules
+    networks:
+      - mia-network
+
+networks:
+  mia-network:
+    driver: bridge
+
+volumes:
+  mia_pgdata:
+  mia_models:
